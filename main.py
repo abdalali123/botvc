@@ -1,68 +1,49 @@
 import discord
 from discord.ext import commands
-import json
-import asyncio
 import os
+import asyncio
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 
-# الإعدادات
-# ملاحظة: إذا قمت بعمل Reset للتوكن، ضعه هنا فوراً
-BOT_TOKEN = "MTQ5OTgzOTM1NTAxMzk1NTYzNA.G43FDh.Yks3x6rEffkpBeUoXaKgGtqOhzOExiAmPaAfyQ"
-APP_ID = "1499839355013955634"
+# جلب التوكن من متغيرات البيئة في Railway
+BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 
 class GrokBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.all()
-        super().__init__(command_prefix="!", intents=intents, application_id=APP_ID)
+        super().__init__(command_prefix="!", intents=intents)
         self.browser = None
-        self.context = None
         self.page = None
 
     async def setup_hook(self):
-        print("--- بدء تشغيل محرك المتصفح ---")
-        try:
-            self.pw = await async_playwright().start()
-            self.browser = await self.pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox"]
-            )
-            self.context = await self.browser.new_context()
-            
-            if os.path.exists('cookies.json'):
-                with open('cookies.json', 'r') as f:
-                    cookies = json.load(f)
-                await self.context.add_cookies(cookies)
-            
-            self.page = await self.context.new_page()
-            await stealth_async(self.page)
-            
-            print("--- التوجه إلى Grok ---")
-            await self.page.goto("https://x.com/i/grok")
-            await asyncio.sleep(2)
-            print("--- النظام جاهز في الخلفية ---")
-        except Exception as e:
-            print(f"⚠️ فشل إعداد المتصفح: {e}")
+        print("--- جاري تشغيل المتصفح في الخلفية ---")
+        self.pw = await async_playwright().start()
+        self.browser = await self.pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        self.context = await self.browser.new_context()
+        self.page = await self.context.new_page()
+        await stealth_async(self.page)
+        await self.page.goto("https://x.com/i/grok")
+        print("--- البوت جاهز تماماً ---")
 
 bot = GrokBot()
 
 @bot.command()
 async def join(ctx):
     if ctx.author.voice:
+        channel = ctx.author.voice.channel
+        await channel.connect()
+        await ctx.send(f"✅ انضممت إلى {channel.name}")
+        # محاولة تفعيل المايك في Grok
         try:
-            channel = ctx.author.voice.channel
-            await channel.connect()
-            await ctx.send(f"✅ تم الانضمام لـ {channel.name}")
-            # محاولة النقر على زر الصوت في Grok
             await bot.page.click('button:has(div[class*="bg-fg-invert"])')
-        except Exception as e:
-            await ctx.send(f"⚠️ خطأ: {e}")
+        except:
+            pass
     else:
-        await ctx.send("⚠️ ادخل روم صوتي أولاً!")
+        await ctx.send("❌ ادخل روم صوتي أولاً")
 
 @bot.event
 async def on_ready():
-    print(f'✅ البوت متصل الآن باسم: {bot.user}')
+    print(f'✅ البوت يعمل الآن باسم: {bot.user}')
 
 if __name__ == "__main__":
     bot.run(BOT_TOKEN)
