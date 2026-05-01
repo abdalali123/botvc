@@ -1,6 +1,6 @@
 FROM python:3.9-slim
 
-# تثبيت متطلبات النظام الضرورية للمتصفح والصوت
+# تثبيت متطلبات النظام، الصوت، والمكتبات المشفرة
 RUN apt-get update && apt-get install -y \
     pulseaudio \
     xvfb \
@@ -16,11 +16,13 @@ RUN apt-get update && apt-get install -y \
     libgbm1 \
     libasound2 \
     ca-certificates \
+    libopus-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# تثبيت المكتبات والمتصفح
+# تثبيت المكتبات
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium
@@ -28,6 +30,6 @@ RUN playwright install-deps
 
 COPY . .
 
-# تشغيل نظام الصوت الوهمي ثم البوت
+# تشغيل نظام الصوت ثم البوت
 CMD pulseaudio -D --exit-idle-time=-1 --system --disallow-exit; \
     python main.py
