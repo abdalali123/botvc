@@ -1,4 +1,4 @@
-discord.py
-PyNacl
+git+https://github.com/Rapptz/discord.py[voice]
+PyNaCl
 playwright
 playwright-stealth==1.0.6
