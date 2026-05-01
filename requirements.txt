@@ -1,0 +1,3 @@
+discord.py
+playwright
+playwright-stealth==1.0.6
