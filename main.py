@@ -1,17 +1,17 @@
 import discord
-from discord import app_commands # مكتبة الأوامر المائلة
+from discord import app_commands 
 from discord.ext import commands
 import os
 import asyncio
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 
+# جلب التوكن من Variables في Railway
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 
 class GrokBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.all()
-        # نستخدم command_prefix فقط كاحتياط، الأساس سيكون الـ Slash
         super().__init__(command_prefix="!", intents=intents)
         self.browser = None
         self.page = None
@@ -25,41 +25,40 @@ class GrokBot(commands.Bot):
         await stealth_async(self.page)
         await self.page.goto("https://x.com/i/grok")
         
-        # مزامنة الأوامر المائلة مع ديسكورد ليراها المستخدم عند ضغط /
+        # هذه الخطوة هي التي تجعل الأوامر تظهر عند ضغط /
+        print("--- جاري مزامنة الأوامر مع ديسكورد ---")
         await self.tree.sync() 
-        print("--- تم مزامنة Slash Commands بنجاح ---")
 
 bot = GrokBot()
 
-# تعريف الأمر المائل (Slash Command)
-@bot.tree.command(name="summon", description="Summon the shadows to join your voice channel")
-@app_commands.describe(my_nega="Type 'my nega' to complete the summon")
-async def summon(interaction: discord.Interaction, my_nega: str):
-    # التحقق من الجملة المدخلة
-    if my_nega.lower() == "my nega":
+# تعريف الأمر المائل المخصص الذي طلبته
+@bot.tree.command(name="i", description="Summon the shadows")
+@app_commands.describe(action="Type 'summon my nega' to perform the ritual")
+async def summon(interaction: discord.Interaction, action: str):
+    if action.lower() == "summon my nega":
         if interaction.user.voice:
-            # يجب الرد على الـ Interaction أولاً
+            # الرد الفوري لإخبار المستخدم بنجاح الأمر
             await interaction.response.send_message("🌑 **The shadows obey... I have arrived.**")
             
             try:
                 channel = interaction.user.voice.channel
                 await channel.connect()
                 
-                # تفعيل المايك في Grok
+                # تفعيل المايك في واجهة Grok
                 try:
                     await bot.page.click('button:has(div[class*="bg-fg-invert"])')
                 except:
                     pass
             except Exception as e:
-                await interaction.followup.send(f"⚠️ خطأ أثناء الاتصال: {e}")
+                await interaction.followup.send(f"⚠️ خطأ أثناء الانضمام: {e}")
         else:
             await interaction.response.send_message("⚠️ يجب أن تكون في قناة صوتية أولاً!")
     else:
-        await interaction.response.send_message("❓ الجملة غير صحيحة. حاول استخدام: `my nega`")
+        await interaction.response.send_message("❓ الجملة غير صحيحة، اكتب: `summon my nega`")
 
 @bot.event
 async def on_ready():
-    print(f'✅ البوت يعمل باسم: {bot.user}')
+    print(f'✅ البوت جاهز تماماً باسم: {bot.user}')
 
 if __name__ == "__main__":
     bot.run(BOT_TOKEN)
