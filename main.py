@@ -8,7 +8,7 @@ from playwright_stealth import stealth_async
 
 # الإعدادات
 # ملاحظة: إذا قمت بعمل Reset للتوكن، ضعه هنا فوراً
-BOT_TOKEN = "MTQ5OTgzOTM1NTAxMzk1NTYzNA.G8I18t.8qjO3XLiOEbaVzi98bRuInQFlpRynfVsWYAZf4"
+BOT_TOKEN = "MTQ5OTgzOTM1NTAxMzk1NTYzNA.G43FDh.Yks3x6rEffkpBeUoXaKgGtqOhzOExiAmPaAfyQ"
 APP_ID = "1499839355013955634"
 
 class GrokBot(commands.Bot):
