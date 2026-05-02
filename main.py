@@ -283,14 +283,10 @@ async def nega(interaction: discord.Interaction):
 
         # ── try multiple selectors in order ──────────────────────────────────
         selectors = [
+            'button[aria-label="Enter voice mode"]',   # confirmed from page scan
+            'button[aria-label*="voice mode" i]',
             'button[aria-label*="microphone" i]',
             'button[aria-label*="voice" i]',
-            'button[aria-label*="audio" i]',
-            'button[aria-label*="speak" i]',
-            'button[aria-label*="talk" i]',
-            'button:has(div[class*="bg-fg-invert"])',
-            'button:has(svg[data-testid*="mic" i])',
-            'button:has(svg[aria-label*="mic" i])',
         ]
 
         clicked = False
