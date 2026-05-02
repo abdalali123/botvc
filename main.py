@@ -94,7 +94,7 @@ class GrokBot(commands.Bot):
                     "strict":         "Strict",
                     "none":           "None",
                 }
-                STRIP_FIELDS = {"hostOnly", "session", "storeId"}
+                STRIP_FIELDS = {"hostOnly", "session", "storeId", "id"}
 
                 cookies = []
                 for c in raw_cookies:
@@ -129,10 +129,10 @@ class GrokBot(commands.Bot):
 
     # ── grok page loader ──────────────────────────────────────────────────────
     async def _load_grok(self):
-        log("grok_load", "Navigating to https://x.com/i/grok …")
+        log("grok_load", "Navigating to https://grok.com …")
         try:
             response = await self.page.goto(
-                "https://x.com/i/grok",
+                "https://grok.com",
                 wait_until="domcontentloaded",
                 timeout=30_000
             )
@@ -238,7 +238,7 @@ async def nega(interaction: discord.Interaction):
 
         if "grok" not in current_url:
             log("nega", "Not on Grok page — reloading …", "WARN")
-            await bot.page.goto("https://x.com/i/grok", wait_until="domcontentloaded", timeout=20_000)
+            await bot.page.goto("https://grok.com", wait_until="domcontentloaded", timeout=20_000)
             await asyncio.sleep(3)
 
         # ── screenshot BEFORE and send to Discord immediately ────────────────
@@ -307,24 +307,59 @@ async def nega(interaction: discord.Interaction):
             except Exception as sel_err:
                 log("nega", f"  → Not found ({type(sel_err).__name__})")
 
-        await asyncio.sleep(1)
+        # Wait longer for voice mode to attempt connection
+        await asyncio.sleep(4)
 
-        # ── screenshot AFTER click and send to Discord ────────────────────────
+        # ── diagnose WHY voice mode fails ────────────────────────────────────
+        diag = await bot.page.evaluate("""
+            async () => {
+                const info = {};
+                try {
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    info.audioInputs = devices.filter(d => d.kind === 'audioinput').map(d => d.label || d.deviceId).join(', ') || 'none found';
+                } catch(e) { info.audioInputs = 'ERROR: ' + e.message; }
+
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    info.micStream = 'OK - tracks: ' + stream.getAudioTracks().length;
+                    stream.getTracks().forEach(t => t.stop());
+                } catch(e) { info.micStream = 'FAILED: ' + e.message; }
+
+                try {
+                    const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}]});
+                    const offer = await pc.createOffer({offerToReceiveAudio: true});
+                    await pc.setLocalDescription(offer);
+                    await new Promise(r => setTimeout(r, 2500));
+                    const sdp = pc.localDescription ? pc.localDescription.sdp : '';
+                    info.iceCandidates = sdp.split('\\n').filter(l => l.startsWith('a=candidate')).length + ' candidates';
+                    pc.close();
+                } catch(e) { info.iceCandidates = 'ERROR: ' + e.message; }
+
+                const errEl = document.querySelector('[class*="error"], [class*="Error"]');
+                info.pageError = errEl ? errEl.innerText.slice(0, 150) : 'none visible';
+                return info;
+            }
+        """)
+
+        diag_lines = ["```"]
+        for k, v in diag.items():
+            diag_lines.append(f"{k}: {v}")
+        diag_lines.append("```")
+        log("nega", f"Diagnostics: {diag}")
+        await interaction.followup.send("🔬 **تشخيص WebRTC/صوت:**\n" + "\n".join(diag_lines))
+
         shot_after = await screenshot(bot.page, "03_after_click")
         if shot_after:
-            await interaction.followup.send(
-                "📸 **صورة الصفحة بعد المحاولة:**",
-                file=discord.File(shot_after, filename="grok_after.png")
-            )
+            await interaction.followup.send("📸 **بعد الضغط:**", file=discord.File(shot_after, filename="grok_after.png"))
 
         if clicked:
-            await interaction.followup.send("🌑 **The shadows obey... I have arrived.**")
-        else:
-            log("nega", "No mic button found", "WARN")
             await interaction.followup.send(
-                "⚠️ **ما لقيت زر الميكروفون.**\n"
-                "شوف الصور وقائمة الأزرار فوق — أرسلها لي وأضيف السيليكتور الصح."
+                "✅ الزر اشتغل — لكن Grok رفض الاتصال.\n"
+                "• `micStream: FAILED` = مشكلة إذن ميكروفون\n"
+                "• `iceCandidates: 0` = Railway يحجب UDP/WebRTC"
             )
+        else:
+            await interaction.followup.send("⚠️ ما لقيت زر voice mode.")
 
     except Exception as e:
         log("nega", f"Grok interaction error: {e}", "ERROR")
