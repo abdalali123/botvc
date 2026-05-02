@@ -3,3 +3,4 @@ discord-ext-voice-recv
 PyNaCl>=1.5.0
 playwright>=1.40.0
 cffi>=1.15.0
+gtts>=2.3.2
