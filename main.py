@@ -5,7 +5,6 @@ import os
 import asyncio
 import json
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 MY_GUILD = discord.Object(id=1408448201555447968)
@@ -33,7 +32,7 @@ class GrokBot(commands.Bot):
         self.browser = None
         self.context = None
         self.page = None
-        self.grok_ready = False   # flipped to True once the page is usable
+        self.grok_ready = False
 
     # ── boot ──────────────────────────────────────────────────────────────────
     async def setup_hook(self):
@@ -42,28 +41,49 @@ class GrokBot(commands.Bot):
             self.pw = await async_playwright().start()
             log("setup_hook", "Playwright started ✓")
 
+            # Anti-detection via browser args — no external stealth library needed
             self.browser = await self.pw.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-blink-features=AutomationControlled",  # hides webdriver flag
+                    "--disable-infobars",
+                    "--disable-dev-shm-usage",
+                    "--disable-extensions",                           # no extensions = no conflict
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--window-size=1280,800",
+                ]
             )
             log("setup_hook", "Browser launched ✓")
 
             self.context = await self.browser.new_context(
                 user_agent=(
-                    "Mozilla/5.0 (X11; Linux x86_64) "
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/124.0.0.0 Safari/537.36"
-                )
+                ),
+                viewport={"width": 1280, "height": 800},
+                locale="en-US",
+                timezone_id="America/New_York",
             )
             log("setup_hook", "Browser context created ✓")
+
+            # Patch navigator.webdriver = false at the JS level
+            await self.context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                window.chrome = { runtime: {} };
+            """)
+            log("setup_hook", "JS anti-detection patches applied ✓")
 
             # load cookies
             if os.path.exists("cookies.json"):
                 with open("cookies.json", "r") as f:
                     raw_cookies = json.load(f)
 
-                # Playwright only accepts sameSite: Strict | Lax | None
-                # Browser extensions export "unspecified" and "no_restriction" — fix them
                 SAMESITE_MAP = {
                     "unspecified":    "None",
                     "no_restriction": "None",
@@ -71,7 +91,6 @@ class GrokBot(commands.Bot):
                     "strict":         "Strict",
                     "none":           "None",
                 }
-                # Fields Playwright's add_cookies does NOT accept
                 STRIP_FIELDS = {"hostOnly", "session", "storeId"}
 
                 cookies = []
@@ -87,8 +106,7 @@ class GrokBot(commands.Bot):
                 log("setup_hook", "No cookies.json found — will likely hit login wall", "WARN")
 
             self.page = await self.context.new_page()
-            await stealth_async(self.page)
-            log("setup_hook", "Stealth applied ✓")
+            log("setup_hook", "Page created ✓")
 
             # navigate in background so command sync isn't blocked
             asyncio.create_task(self._load_grok())
@@ -116,19 +134,49 @@ class GrokBot(commands.Bot):
                 timeout=30_000
             )
             log("grok_load", f"Page responded with HTTP {response.status}")
-            await asyncio.sleep(4)   # let JS hydrate
+            await asyncio.sleep(5)   # let JS hydrate fully
 
-            url = self.page.url
-            log("grok_load", f"Current URL after load: {url}")
+            # ── retry loop: handle "Something went wrong" error screen ────────
+            for attempt in range(3):
+                url = self.page.url
+                log("grok_load", f"[attempt {attempt+1}] URL: {url}")
+
+                # Check for the error page text
+                try:
+                    error_text = await self.page.locator("text=Something went wrong").count()
+                except Exception:
+                    error_text = 0
+
+                if error_text > 0:
+                    log("grok_load", "Error page detected — clicking 'Try again' …", "WARN")
+                    try:
+                        await self.page.click("text=Try again", timeout=5000)
+                        await asyncio.sleep(5)
+                    except Exception as e:
+                        log("grok_load", f"Could not click Try again: {e}", "WARN")
+                    continue  # re-check
+
+                # Check for login redirect
+                if "login" in url or "signin" in url:
+                    log("grok_load", "Redirected to login — cookies may be stale!", "WARN")
+                    await screenshot(self.page, "01_login_redirect")
+                    self.grok_ready = False
+                    return
+
+                # Page looks good — break out
+                break
+
             await screenshot(self.page, "01_after_load")
+            title = await self.page.title()
+            log("grok_load", f"Page title: '{title}'")
 
-            if "login" in url or "signin" in url:
-                log("grok_load", "Redirected to login — cookies may be stale!", "WARN")
+            # Final check
+            final_url = self.page.url
+            if "login" in final_url or "signin" in final_url:
+                log("grok_load", "Still on login page after retries!", "ERROR")
                 self.grok_ready = False
                 return
 
-            title = await self.page.title()
-            log("grok_load", f"Page title: {title}")
             self.grok_ready = True
             log("grok_load", "Grok page READY ✓")
 
