@@ -15,8 +15,18 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Allow PulseAudio system-mode socket dir ───────────────────────────────────
-RUN mkdir -p /var/run/pulse && chmod 755 /var/run/pulse
+# ── PulseAudio: create socket dir + minimal system config ────────────────────
+RUN mkdir -p /var/run/pulse /etc/pulse && chmod 755 /var/run/pulse
+
+# Load only what we need — avoids the "Daemon startup failed" crash
+# that happens when the default system.pa references missing modules.
+RUN cat > /etc/pulse/system.pa << 'EOF'
+#!/usr/bin/pulseaudio -nF
+load-module module-native-protocol-unix
+load-module module-null-sink sink_name=grok_speaker sink_properties=device.description="GrokSpeaker"
+load-module module-null-sink sink_name=discord_mic_sink sink_properties=device.description="DiscordMicSink"
+load-module module-virtual-source source_name=discord_mic master=discord_mic_sink.monitor source_properties=device.description="DiscordMic"
+EOF
 
 WORKDIR /app
 
