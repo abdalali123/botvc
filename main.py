@@ -22,44 +22,6 @@ def log(step: str, msg: str, level: str = "INFO"):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] [{level:8}] [{step:15}] {msg}", flush=True)
 
-def check_pulseaudio():
-    """Verify PulseAudio is running and accessible"""
-    try:
-        result = subprocess.run(['pactl', 'info'], capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            log("PULSE", "PulseAudio daemon is running ✓")
-            return True
-        else:
-            log("PULSE", f"pactl error: {result.stderr}", "ERROR")
-            return False
-    except Exception as e:
-        log("PULSE", f"Cannot reach PulseAudio: {e}", "ERROR")
-        return False
-
-def check_audio_devices():
-    """Verify null sinks and monitor devices exist"""
-    try:
-        result = subprocess.run(['pactl', 'list', 'sinks'], capture_output=True, text=True, timeout=5)
-        sinks = result.stdout
-        
-        has_grok = "grok_speaker" in sinks
-        has_discord = "discord_mic_sink" in sinks
-        
-        if has_grok:
-            log("PULSE", "✓ grok_speaker sink found")
-        else:
-            log("PULSE", "✗ grok_speaker sink NOT found", "WARN")
-            
-        if has_discord:
-            log("PULSE", "✓ discord_mic_sink found")
-        else:
-            log("PULSE", "✗ discord_mic_sink NOT found", "WARN")
-        
-        return has_grok and has_discord
-    except Exception as e:
-        log("PULSE", f"Cannot check sinks: {e}", "ERROR")
-        return False
-
 class DiscordToGrokSink(DiscordSinkBase):
     """Sink for capturing Discord voice and sending to Grok"""
     def __init__(self, ffmpeg_proc):
@@ -89,70 +51,12 @@ class AudioBridge:
         self._out_player = None
 
     async def _start_output(self, vc: discord.VoiceClient):
-        """
-        Stream audio from Grok speaker sink to Discord.
-        This reads from the grok_speaker.monitor device.
-        """
-        log("AUDIO_OUT", "Starting Grok→Discord stream...")
-        
-        try:
-            # Read from the PulseAudio monitor device of the null sink
-            # The monitor device automatically captures everything sent to grok_speaker
-            source = discord.FFmpegPCMAudio(
-                "-f pulse -i grok_speaker.monitor -t 3600",
-                before_options="",
-                options="-ac 2 -ar 48000 -b:a 128k"
-            )
-            
-            # Adjust volume and play
-            transformed = discord.PCMVolumeTransformer(source, volume=1.5)
-            vc.play(transformed, after=self._on_playback_end)
-            
-            log("AUDIO_OUT", "Grok→Discord bridge ACTIVE ✓")
-            self._out_player = vc
-            
-        except Exception as e:
-            log("AUDIO_OUT", f"FFmpeg capture failed: {e}", "ERROR")
-            log("AUDIO_OUT", "Ensure PulseAudio null sinks are created", "ERROR")
+        """Placeholder - audio bridges disabled (requires PulseAudio/hardware audio)"""
+        log("AUDIO_OUT", "Audio bridges not available in containerized environment")
 
     async def _start_input(self, vc: discord.VoiceClient):
-        """
-        Capture Discord voice and send to Grok via discord_mic_sink.
-        This remaps Discord audio to the Grok input.
-        """
-        if not HAS_SINKS:
-            log("AUDIO_IN", "discord-ext-voice-recv not available, skipping", "WARN")
-            return
-        
-        log("AUDIO_IN", "Starting Discord→Grok stream...")
-        
-        try:
-            # FFmpeg command: receive Discord audio (s16le format) and send to PulseAudio
-            cmd = [
-                "ffmpeg",
-                "-loglevel", "error",
-                "-f", "s16le",
-                "-ar", "48000",
-                "-ac", "2",
-                "-i", "pipe:0",
-                "-f", "pulse",
-                "-t", "3600",  # 1-hour timeout
-                "discord_mic_sink"
-            ]
-            
-            self._in_proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            # Start listening to Discord voice
-            vc.listen(DiscordToGrokSink(self._in_proc))
-            log("AUDIO_IN", "Discord→Grok bridge ACTIVE ✓")
-            
-        except Exception as e:
-            log("AUDIO_IN", f"Setup failed: {e}", "ERROR")
+        """Placeholder - audio bridges disabled (requires PulseAudio/hardware audio)"""
+        log("AUDIO_IN", "Audio bridges not available in containerized environment")
 
     def _on_playback_end(self, error):
         """Called when Discord playback finishes"""
@@ -184,25 +88,63 @@ class GrokBot(commands.Bot):
         self.browser = None
         self.pw = None
 
-    async def setup_hook(self):
-        """Initialize bot, set up Playwright, configure PulseAudio"""
-        log("SETUP", "Bot initializing...")
+    def _convert_browser_cookies(self, cookies):
+        """
+        Convert cookies from browser extension format to Playwright format.
         
-        # ============ PULSEAUDIO VERIFICATION ============
-        if not check_pulseaudio():
-            log("SETUP", "PulseAudio not ready, waiting 2 seconds...", "WARN")
-            await asyncio.sleep(2)
+        Handles:
+        - Removal of extra fields (hostOnly, session, storeId, id)
+        - Conversion of sameSite values (unspecified→None, no_restriction→None, etc)
+        - Expiration date conversion to integers
+        """
+        playwright_cookies = []
+        
+        for cookie in cookies:
+            pw_cookie = {
+                "name": cookie["name"],
+                "value": cookie["value"],
+                "domain": cookie["domain"],
+                "path": cookie.get("path", "/"),
+            }
             
-            if not check_pulseaudio():
-                log("SETUP", "PulseAudio still unavailable - audio bridges will fail", "ERROR")
+            # Add expiration if present
+            if "expirationDate" in cookie:
+                pw_cookie["expirationDate"] = int(cookie["expirationDate"])
+            
+            # Add optional boolean flags
+            if "httpOnly" in cookie:
+                pw_cookie["httpOnly"] = cookie["httpOnly"]
+            
+            if "secure" in cookie:
+                pw_cookie["secure"] = cookie["secure"]
+            
+            # Convert sameSite values
+            same_site = cookie.get("sameSite", "unspecified")
+            if isinstance(same_site, str):
+                same_site = same_site.lower()
+            else:
+                same_site = "unspecified"
+            
+            if same_site in ["unspecified", "none"]:
+                pw_cookie["sameSite"] = "None"
+            elif same_site == "lax":
+                pw_cookie["sameSite"] = "Lax"
+            elif same_site == "strict":
+                pw_cookie["sameSite"] = "Strict"
+            elif same_site == "no_restriction":
+                pw_cookie["sameSite"] = "None"
+            
+            playwright_cookies.append(pw_cookie)
         
-        if not check_audio_devices():
-            log("SETUP", "Audio devices not configured - falling back to Discord voice only", "WARN")
+        return playwright_cookies
+
+    async def setup_hook(self):
+        """Initialize bot and Playwright browser"""
+        log("SETUP", "Bot initializing...")
         
         # ============ PLAYWRIGHT SETUP ============
         try:
             log("SETUP", "Starting Playwright...")
-            os.environ["PULSE_SERVER"] = "unix:/tmp/pulse/native"
             
             self.pw = await async_playwright().start()
             self.browser = await self.pw.chromium.launch(
@@ -225,14 +167,20 @@ class GrokBot(commands.Bot):
                 try:
                     with open(cookies_file) as f:
                         cookies = json.load(f)
-                        await self.context.add_cookies(cookies)
-                        log("SETUP", f"Loaded {len(cookies)} cookies ✓")
+                    
+                    # Auto-detect and convert browser export format if needed
+                    if cookies and isinstance(cookies, list) and "hostOnly" in cookies[0]:
+                        log("SETUP", "Converting cookies from browser format to Playwright format...", "WARN")
+                        cookies = self._convert_browser_cookies(cookies)
+                    
+                    await self.context.add_cookies(cookies)
+                    log("SETUP", f"Loaded {len(cookies)} cookies ✓")
                 except json.JSONDecodeError as e:
                     log("SETUP", f"Invalid cookies.json: {e}", "WARN")
                 except Exception as e:
                     log("SETUP", f"Cookie load error: {e}", "WARN")
             else:
-                log("SETUP", f"cookies.json not found at {cookies_file}", "WARN")
+                log("SETUP", f"cookies.json not found - fresh login required", "WARN")
             
             # ============ NAVIGATE TO GROK ============
             log("SETUP", "Navigating to Grok...")
