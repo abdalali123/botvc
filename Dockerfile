@@ -2,14 +2,10 @@ FROM python:3.9-slim
 
 # ============ INSTALL SYSTEM DEPENDENCIES ============
 RUN apt-get update && apt-get install -y \
-    # Build tools
     git build-essential libffi-dev \
-    # Audio
     libopus-dev ffmpeg pulseaudio pulseaudio-utils \
-    # Chromium/Playwright dependencies
     libnss3 ca-certificates libxss1 libatk-bridge2.0-0 \
-    libglib2.0-0 libxrandr2 libgconf-2-4 \
-    # Utilities
+    libglib2.0-0 \
     curl wget \
     && rm -rf /var/lib/apt/lists/*
 
