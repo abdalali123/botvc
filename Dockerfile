@@ -15,13 +15,14 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# ── PulseAudio: create socket dir + minimal system config ────────────────────
-RUN mkdir -p /var/run/pulse /etc/pulse && chmod 755 /var/run/pulse
+# ── PulseAudio: non-system mode, allow root ──────────────────────────────────
+RUN mkdir -p /etc/pulse /tmp/pulse
 
-# Load only what we need — avoids the "Daemon startup failed" crash
-# that happens when the default system.pa references missing modules.
-RUN cat > /etc/pulse/system.pa << 'EOF'
-#!/usr/bin/pulseaudio -nF
+# Allow PA to start as root without --system (avoids D-Bus dependency)
+RUN echo "allow-root = yes" >> /etc/pulse/daemon.conf
+
+# Minimal default.pa — only the four modules we actually need
+RUN cat > /etc/pulse/default.pa << 'EOF'
 load-module module-native-protocol-unix
 load-module module-null-sink sink_name=grok_speaker sink_properties=device.description="GrokSpeaker"
 load-module module-null-sink sink_name=discord_mic_sink sink_properties=device.description="DiscordMicSink"
