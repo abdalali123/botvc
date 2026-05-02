@@ -7,6 +7,14 @@ import json
 import subprocess
 from playwright.async_api import async_playwright
 
+# discord.sinks is not re-exported from the top-level discord package in all builds
+try:
+    from discord.sinks import Sink as DiscordSinkBase
+    HAS_SINKS = True
+except ImportError:
+    HAS_SINKS = False
+    DiscordSinkBase = object  # dummy base so the class definition doesn't crash
+
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")
 MY_GUILD = discord.Object(id=1408448201555447968)
 
@@ -26,11 +34,12 @@ async def screenshot(page, name: str):
 
 
 # ─── Audio bridge ─────────────────────────────────────────────────────────────
-class DiscordToGrokSink(discord.sinks.Sink):
+class DiscordToGrokSink(DiscordSinkBase):
     """Receives audio from Discord VC and writes raw PCM to ffmpeg stdin."""
 
     def __init__(self, ffmpeg_stdin):
-        super().__init__()
+        if HAS_SINKS:
+            super().__init__()
         self._stdin = ffmpeg_stdin
 
     def write(self, data, user):
@@ -82,6 +91,10 @@ class AudioBridge:
     # ── Discord → Grok ────────────────────────────────────────────────────────
     async def _start_input(self, vc: discord.VoiceClient):
         """Receive Discord audio and pipe it into the PulseAudio virtual mic."""
+        if not HAS_SINKS:
+            log("bridge", "discord.sinks not available — Discord→Grok direction disabled", "WARN")
+            return
+
         cmd = [
             "ffmpeg", "-loglevel", "quiet",
             "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
