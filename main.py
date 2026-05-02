@@ -7,12 +7,15 @@ import json
 import subprocess
 from playwright.async_api import async_playwright
 
+# --- الإعدادات الأساسية ---
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")
+# تأكد من أن الـ ID هو الخاص بسيرفرك البرمجي
 MY_GUILD = discord.Object(id=1408448201555447968)
 
 def log(step: str, msg: str, level: str = "INFO"):
     print(f"[{level}] [{step}] {msg}", flush=True)
 
+# --- كلاس البوت ---
 class GrokBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.all()
@@ -23,57 +26,68 @@ class GrokBot(commands.Bot):
         self.grok_ready = False
 
     async def setup_hook(self):
-        log("setup_hook", "Initializing optimized environment for Railway...")
+        log("setup_hook", "Initializing PulseAudio environment variables...")
         
-        # ربط PulseAudio بالمتصفح
+        # ربط المتصفح بأجهزة الصوت الوهمية التي تم إنشاؤها في Dockerfile
         os.environ["PULSE_SINK"] = "grok_output"
         os.environ["PULSE_SOURCE"] = "user_voice_to_grok.monitor"
 
         try:
+            log("setup_hook", "Launching Browser...")
             self.pw = await async_playwright().start()
             self.browser = await self.pw.chromium.launch(
                 headless=True,
                 args=[
                     "--no-sandbox",
+                    "--disable-setuid-sandbox",
                     "--disable-blink-features=AutomationControlled",
-                    "--use-fake-ui-for-media-stream", # قبول الميكروفون تلقائياً
+                    "--use-fake-ui-for-media-stream",
                     "--autoplay-policy=no-user-gesture-required",
-                    "--disable-webrtc-hw-encoding",
-                    "--disable-webrtc-hw-decoding",
-                    "--force-webrtc-ip-handling-policy=default_public_interface_only"
                 ]
             )
-            self.context = await self.browser.new_page()
             
-            # منح الإذن الصريح للميكروفون لتجاوز خطأ FAILED
-            await self.context.context.grant_permissions(["microphone"], origin="https://grok.com")
+            # إنشاء سياق المتصفح مع منح إذن الميكروفون
+            self.context = await self.browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                permissions=["microphone"]
+            )
+            
+            # منح الإذن الصريح لرابط Grok لتجنب فشل الاتصال
+            await self.context.grant_permissions(["microphone"], origin="https://grok.com")
 
+            # تحميل الكوكيز إذا كانت موجودة
             if os.path.exists("cookies.json"):
                 with open("cookies.json", "r") as f:
-                    await self.context.context.add_cookies(json.load(f))
+                    cookies = json.load(f)
+                await self.context.add_cookies(cookies)
+                log("setup_hook", "Cookies loaded ✓")
 
-            self.page = self.context
+            self.page = await self.context.new_page()
             asyncio.create_task(self._load_grok())
 
         except Exception as e:
-            log("setup_hook", f"FAILED: {e}", "ERROR")
+            log("setup_hook", f"Browser Setup FAILED: {e}", "ERROR")
 
+        # مزامنة الأوامر
         self.tree.add_command(nega, guild=MY_GUILD)
         await self.tree.sync(guild=MY_GUILD)
+        log("setup_hook", "Commands synced ✓")
 
     async def _load_grok(self):
+        log("grok_load", "Navigating to Grok...")
         try:
-            await self.page.goto("https://grok.com", wait_until="networkidle")
+            await self.page.goto("https://grok.com", wait_until="networkidle", timeout=60000)
             self.grok_ready = True
-            log("grok_load", "Grok page is READY ✓")
+            log("grok_load", "Grok is READY ✓")
         except Exception as e:
-            log("grok_load", f"Error: {e}", "ERROR")
+            log("grok_load", f"Navigation failed: {e}", "ERROR")
 
 bot = GrokBot()
 
-# --- جسر إرسال صوت ديسكورد إلى ميكروفون Grok ---
+# --- جسر إرسال صوت المستخدمين من ديسكورد إلى ميكروفون Grok ---
 class PulseAudioSink(voice_recv.AudioSink):
     def __init__(self):
+        # استخدام FFmpeg لضخ بيانات PCM القادمة من ديسكورد إلى جهاز PulseAudio الوهمي
         self.process = subprocess.Popen(
             ['ffmpeg', '-f', 's16le', '-ar', '48000', '-ac', '2', '-i', '-', 
              '-f', 'pulse', 'user_voice_to_grok'],
@@ -82,31 +96,50 @@ class PulseAudioSink(voice_recv.AudioSink):
 
     def write(self, user, data):
         if self.process.stdin:
-            self.process.stdin.write(data.pcm)
+            try:
+                self.process.stdin.write(data.pcm)
+            except Exception:
+                pass
 
     def cleanup(self):
         if self.process:
             self.process.terminate()
+            log("PulseAudioSink", "FFmpeg process cleaned up.")
 
-@app_commands.command(name="nega", description="Call Grok to your voice channel")
+# --- الأمر الأساسي /nega ---
+@app_commands.command(name="nega", description="Connect the shadow voice of Grok to your channel")
 async def nega(interaction: discord.Interaction):
+    log("nega", f"Called by {interaction.user}")
     await interaction.response.defer(thinking=True)
 
+    # 1. التحقق من وجود المستخدم في قناة صوتية
     if not interaction.user.voice:
-        return await interaction.followup.send("⚠️ Join a voice channel first!")
+        return await interaction.followup.send("⚠️ You must be in a voice channel!")
 
-    # 1. الاتصال الصوتي (استخدام VoiceRecvClient لاستقبال الصوت)
-    channel = interaction.user.voice.channel
-    vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+    # 2. الاتصال بالقناة الصوتية باستخدام VoiceRecvClient
+    try:
+        channel = interaction.user.voice.channel
+        vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+        log("nega", "Connected to Discord Voice Channel ✓")
+    except Exception as e:
+        return await interaction.followup.send(f"❌ Could not connect to VC: {e}")
+
+    # 3. محاولة تشغيل وضع الصوت في Grok
+    if not bot.grok_ready:
+        return await interaction.followup.send("🌑 Grok is not ready yet. Please wait.")
 
     try:
-        # 2. تفعيل وضع الصوت في Grok
-        # البحث عن الزر بناءً على الـ aria-label الذي ظهر في الفحص السابق
-        voice_btn = self.page.locator('button[aria-label*="voice mode"]')
-        await voice_btn.click()
-        await asyncio.sleep(3)
+        # البحث عن زر وضع الصوت والضغط عليه
+        # ملاحظة: استخدمنا Selector مرن بناءً على الفحص السابق
+        voice_selector = 'button[aria-label*="voice mode"]'
+        await bot.page.wait_for_selector(voice_selector, timeout=10000)
+        await bot.page.click(voice_selector)
+        log("nega", "Clicked Grok voice mode button ✓")
+        
+        await asyncio.sleep(3) # انتظار استقرار الاتصال
 
-        # 3. الجسر الصوتي: سماع Grok (Grok Output -> Discord)
+        # 4. الجسر الصوتي الأول: إرسال صوت Grok إلى ديسكورد
+        # نستخدم monitor لسماع مخرجات المتصفح
         grok_to_discord = discord.FFmpegPCMAudio(
             source="grok_output.monitor",
             before_options="-f pulse",
@@ -114,18 +147,25 @@ async def nega(interaction: discord.Interaction):
         )
         if not vc.is_playing():
             vc.play(grok_to_discord)
+            log("nega", "Routing Grok -> Discord started ✓")
 
-        # 4. الجسر الصوتي: التحدث إلى Grok (Discord -> Grok Mic)
+        # 5. الجسر الصوتي الثاني: استقبال صوت المستخدمين وإرساله لـ Grok
         vc.listen(PulseAudioSink())
+        log("nega", "Routing Discord -> Grok started ✓")
 
-        await interaction.followup.send("✅ **تم الاتصال!** Grok يسمعك الآن في القناة الصوتية.")
+        await interaction.followup.send("🎙️ **The shadows have arrived.** Grok is now listening and speaking.")
 
     except Exception as e:
-        log("nega", f"Interaction error: {e}", "ERROR")
-        await interaction.followup.send(f"❌ خطأ في الاتصال بـ Grok: `{e}`")
+        log("nega", f"Grok Bridge Error: {e}", "ERROR")
+        await interaction.followup.send(f"❌ Failed to bridge Grok: `{e}`")
 
 @bot.event
 async def on_ready():
-    log("on_ready", f"Bot online as {bot.user}")
+    log("on_ready", f"Logged in as {bot.user} (ID: {bot.user.id})")
 
-bot.run(BOT_TOKEN)
+# تشغيل البوت
+if __name__ == "__main__":
+    if not BOT_TOKEN:
+        print("ERROR: DISCORD_TOKEN environment variable not set!")
+    else:
+        bot.run(BOT_TOKEN)
