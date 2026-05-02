@@ -8,6 +8,8 @@ echo "[startup] Starting PulseAudio as 'pulse' user..."
 # lets the root bot process connect to the socket without a cookie.
 mkdir -p /tmp/pulse
 chown pulse:pulse /tmp/pulse
+# Stale socket from a previous run causes "Daemon startup failed" — always remove it first
+rm -f /tmp/pulse/native
 
 su -s /bin/sh pulse -c "
     HOME=/home/pulse \
