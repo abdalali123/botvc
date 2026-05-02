@@ -14,14 +14,16 @@ MY_GUILD = discord.Object(id=1408448201555447968)
 def log(step: str, msg: str, level: str = "INFO"):
     print(f"[{level}] [{step}] {msg}", flush=True)
 
-async def screenshot(page, name: str):
-    """Save a screenshot for debugging and print its path."""
+async def screenshot(page, name: str) -> str | None:
+    """Save a screenshot and return its path (or None on failure)."""
     path = f"/tmp/debug_{name}.png"
     try:
         await page.screenshot(path=path, full_page=True)
         log("screenshot", f"Saved → {path}")
+        return path
     except Exception as e:
         log("screenshot", f"Failed to save {path}: {e}", "WARN")
+        return None
 
 # ─── bot class ────────────────────────────────────────────────────────────────
 class GrokBot(commands.Bot):
@@ -188,14 +190,20 @@ async def nega(interaction: discord.Interaction):
             await bot.page.goto("https://x.com/i/grok", wait_until="domcontentloaded", timeout=20_000)
             await asyncio.sleep(3)
 
-        await screenshot(bot.page, "02_before_click")
+        # ── screenshot BEFORE and send to Discord immediately ────────────────
+        shot_before = await screenshot(bot.page, "02_before_click")
+        if shot_before:
+            await interaction.followup.send(
+                "📸 **صورة الصفحة الآن** (قبل أي ضغط):",
+                file=discord.File(shot_before, filename="grok_page.png")
+            )
 
         # ── dump ALL buttons so we can see what's available ──────────────────
         log("nega", "Enumerating all <button> elements on page …")
         buttons_info = await bot.page.evaluate("""
             () => {
                 const btns = [...document.querySelectorAll('button')];
-                return btns.slice(0, 30).map((b, i) => ({
+                return btns.slice(0, 40).map((b, i) => ({
                     index: i,
                     text: b.innerText.trim().slice(0, 60),
                     ariaLabel: b.getAttribute('aria-label') || '',
@@ -204,20 +212,35 @@ async def nega(interaction: discord.Interaction):
                 }));
             }
         """)
+
+        # Build a readable text summary for Discord
+        btn_lines = ["```"]
         for btn in buttons_info:
+            vis = "✓" if btn["visible"] else "✗"
+            btn_lines.append(
+                f"[{btn['index']:02d}] vis={vis} "
+                f"aria='{btn['ariaLabel']}' "
+                f"text='{btn['text'][:30]}'"
+            )
             log("nega", f"  btn[{btn['index']}] visible={btn['visible']} "
-                        f"text='{btn['text']}' aria='{btn['ariaLabel']}' "
-                        f"class='{btn['className'][:40]}'")
+                        f"aria='{btn['ariaLabel']}' text='{btn['text']}'")
+        btn_lines.append("```")
+        btn_summary = "\n".join(btn_lines)
+
+        # Send button list to Discord (split if too long)
+        if len(btn_summary) <= 2000:
+            await interaction.followup.send(f"🔍 **الأزرار الموجودة في الصفحة:**\n{btn_summary}")
+        else:
+            await interaction.followup.send(f"🔍 **الأزرار الموجودة في الصفحة:**\n{btn_summary[:1990]}…```")
 
         # ── try multiple selectors in order ──────────────────────────────────
         selectors = [
-            # aria-label based (most stable)
             'button[aria-label*="microphone" i]',
             'button[aria-label*="voice" i]',
             'button[aria-label*="audio" i]',
-            # class-based (brittle but worth trying)
+            'button[aria-label*="speak" i]',
+            'button[aria-label*="talk" i]',
             'button:has(div[class*="bg-fg-invert"])',
-            # SVG mic icon inside button
             'button:has(svg[data-testid*="mic" i])',
             'button:has(svg[aria-label*="mic" i])',
         ]
@@ -235,26 +258,32 @@ async def nega(interaction: discord.Interaction):
                     clicked = True
                     break
             except Exception as sel_err:
-                log("nega", f"  → Not found ({sel_err})")
+                log("nega", f"  → Not found ({type(sel_err).__name__})")
 
         await asyncio.sleep(1)
-        await screenshot(bot.page, "03_after_click")
 
-        if clicked:
-            msg = "🌑 **The shadows obey... I have arrived.**"
-        else:
-            log("nega", "No mic button found — joined VC but couldn't trigger Grok", "WARN")
-            msg = (
-                "🌑 **Joined the channel** — but I couldn't find Grok's mic button.\n"
-                "Check Railway logs: look for `debug_02_before_click.png` and the button list."
+        # ── screenshot AFTER click and send to Discord ────────────────────────
+        shot_after = await screenshot(bot.page, "03_after_click")
+        if shot_after:
+            await interaction.followup.send(
+                "📸 **صورة الصفحة بعد المحاولة:**",
+                file=discord.File(shot_after, filename="grok_after.png")
             )
 
-        await interaction.followup.send(msg)
+        if clicked:
+            await interaction.followup.send("🌑 **The shadows obey... I have arrived.**")
+        else:
+            log("nega", "No mic button found", "WARN")
+            await interaction.followup.send(
+                "⚠️ **ما لقيت زر الميكروفون.**\n"
+                "شوف الصور وقائمة الأزرار فوق — أرسلها لي وأضيف السيليكتور الصح."
+            )
 
     except Exception as e:
         log("nega", f"Grok interaction error: {e}", "ERROR")
-        await screenshot(bot.page, "04_error_state")
-        await interaction.followup.send(f"❌ Grok browser error: `{e}`")
+        shot_err = await screenshot(bot.page, "04_error_state")
+        files = [discord.File(shot_err, filename="error_state.png")] if shot_err else []
+        await interaction.followup.send(f"❌ خطأ: `{e}`", files=files)
 
 
 # ─── events ───────────────────────────────────────────────────────────────────
