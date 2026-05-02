@@ -58,9 +58,29 @@ class GrokBot(commands.Bot):
             # load cookies
             if os.path.exists("cookies.json"):
                 with open("cookies.json", "r") as f:
-                    cookies = json.load(f)
+                    raw_cookies = json.load(f)
+
+                # Playwright only accepts sameSite: Strict | Lax | None
+                # Browser extensions export "unspecified" and "no_restriction" — fix them
+                SAMESITE_MAP = {
+                    "unspecified":    "None",
+                    "no_restriction": "None",
+                    "lax":            "Lax",
+                    "strict":         "Strict",
+                    "none":           "None",
+                }
+                # Fields Playwright's add_cookies does NOT accept
+                STRIP_FIELDS = {"hostOnly", "session", "storeId"}
+
+                cookies = []
+                for c in raw_cookies:
+                    fixed = {k: v for k, v in c.items() if k not in STRIP_FIELDS}
+                    raw_ss = str(fixed.get("sameSite", "None")).lower()
+                    fixed["sameSite"] = SAMESITE_MAP.get(raw_ss, "None")
+                    cookies.append(fixed)
+
                 await self.context.add_cookies(cookies)
-                log("setup_hook", f"Loaded {len(cookies)} cookies ✓")
+                log("setup_hook", f"Loaded {len(cookies)} cookies (sameSite sanitised) ✓")
             else:
                 log("setup_hook", "No cookies.json found — will likely hit login wall", "WARN")
 
