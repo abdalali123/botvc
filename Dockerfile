@@ -32,7 +32,6 @@ RUN playwright install-deps
 # ============ COPY APPLICATION FILES ============
 COPY main.py .
 COPY startup.sh .
-COPY cookies.json . 2>/dev/null || true
 
 # Make startup script executable
 RUN chmod +x startup.sh
