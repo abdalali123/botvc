@@ -16,7 +16,7 @@ RUN playwright install-deps
 
 COPY . .
 
-# إنشاء Sink لسماع Grok و Source لإطعام Grok صوت المستخدم
+# إنشاء أجهزة الصوت الوهمية وتشغيل البوت
 CMD pulseaudio -D --exit-idle-time=-1 --system --disallow-exit && \
     pactl load-module module-null-sink sink_name=grok_output sink_properties=device.description="Grok_Output" && \
     pactl load-module module-null-sink sink_name=user_voice_to_grok sink_properties=device.description="User_Voice_To_Grok" && \
