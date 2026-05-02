@@ -7,9 +7,7 @@ import json
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 
-# جلب التوكن من إعدادات Railway
 BOT_TOKEN = os.getenv("DISCORD_TOKEN")
-# معرف السيرفر الخاص بك للمزامنة الفورية
 MY_GUILD = discord.Object(id=1408448201555447968)
 
 class GrokBot(commands.Bot):
@@ -21,80 +19,87 @@ class GrokBot(commands.Bot):
         self.page = None
 
     async def setup_hook(self):
-        """إعداد محرك المتصفح والأوامر عند تشغيل البوت"""
-        print("--- 🛠️  جاري إعداد محرك Playwright ---")
+        print("--- 🛠️  Setting up Playwright ---")
         try:
             self.pw = await async_playwright().start()
             self.browser = await self.pw.chromium.launch(
-                headless=True, 
+                headless=True,
                 args=["--no-sandbox", "--disable-setuid-sandbox"]
             )
             self.context = await self.browser.new_context()
-            
-            # محاولة تحميل الكوكيز
+
             if os.path.exists('cookies.json'):
                 with open('cookies.json', 'r') as f:
                     cookies = json.load(f)
                 await self.context.add_cookies(cookies)
-            
+
             self.page = await self.context.new_page()
             await stealth_async(self.page)
-            
-            await self.page.goto("https://x.com/i/grok")
-            await asyncio.sleep(2)
-            
-            # مزامنة الأوامر المائلة للسيرفر المحدد فقط (فورية)
-            print(f"--- 🔄 مزامنة الأمر الجديد /nega للسيرفر: {MY_GUILD.id} ---")
-            self.tree.copy_from(guild=MY_GUILD) # نسخ الأوامر للسيرفر
-            await self.tree.sync(guild=MY_GUILD)
-            print("--- ✅ المزامنة الفورية اكتملت ---")
+
+            # Don't await the page navigation here — do it in background
+            asyncio.create_task(self._init_grok_page())
+
         except Exception as e:
-            print(f"⚠️ فشل في إعداد النظام: {e}")
+            print(f"⚠️ Playwright setup failed: {e}")
+
+        # ✅ FIX 1: Clear old global commands so /i disappears
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync()  # push empty global list
+
+        # ✅ FIX 2: Register commands to guild only, then sync
+        self.tree.add_command(nega, guild=MY_GUILD)
+        await self.tree.sync(guild=MY_GUILD)
+        print(f"--- ✅ Guild commands synced to {MY_GUILD.id} ---")
+
+    async def _init_grok_page(self):
+        """Navigate to Grok in background so it doesn't block setup_hook"""
+        try:
+            await self.page.goto("https://x.com/i/grok")
+            await asyncio.sleep(3)
+            print("--- ✅ Grok page loaded ---")
+        except Exception as e:
+            print(f"⚠️ Could not load Grok page: {e}")
+
 
 bot = GrokBot()
 
-@bot.tree.command(
-    name="nega", 
-    description="استدعاء الظلال للانضمام إلى القناة الصوتية"
-)
+# ✅ FIX 3: Don't use @bot.tree.command here — add it manually in setup_hook above
+# Define as a plain async function first, then register it
+@app_commands.command(name="nega", description="Call the shadows to join your voice channel")
 async def nega(interaction: discord.Interaction):
-    """الأمر النهائي بـ Defer ومزامنة فورية"""
-    
-    # 1. إخبار ديسكورد بالانتظار (يحل مشكلة Application did not respond)
     await interaction.response.defer(thinking=True)
-    
-    if interaction.user.voice:
-        try:
-            # 2. الانضمام للقناة الصوتية
-            channel = interaction.user.voice.channel
-            
-            voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
-            if not voice_client:
-                await channel.connect()
-            
-            # 3. التفاعل مع واجهة Grok
+
+    if not interaction.user.voice:
+        await interaction.followup.send("⚠️ Join a voice channel first!")
+        return
+
+    try:
+        channel = interaction.user.voice.channel
+        voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+        if not voice_client:
+            await channel.connect()
+
+        if bot.page:
             try:
                 await bot.page.wait_for_selector('button:has(div[class*="bg-fg-invert"])', timeout=5000)
                 await bot.page.click('button:has(div[class*="bg-fg-invert"])')
-            except:
-                print("⚠️ زر المايك غير متاح في صفحة Grok")
+            except Exception:
+                print("⚠️ Grok mic button not available")
 
-            # 4. الرد النهائي
-            await interaction.followup.send("🌑 **The shadows obey... I have arrived.**")
-            
-        except Exception as e:
-            await interaction.followup.send(f"❌ خطأ أثناء الاستدعاء: {e}")
-    else:
-        await interaction.followup.send("⚠️ ادخل قناة صوتية أولاً!")
+        await interaction.followup.send("🌑 **The shadows obey... I have arrived.**")
+
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {e}")
+
 
 @bot.event
 async def on_ready():
     if not discord.opus.is_loaded():
         try:
             discord.opus.load_opus('libopus.so.0')
-        except:
+        except Exception:
             pass
-    print(f'✅ متصل الآن باسم: {bot.user}')
+    print(f'✅ Connected as: {bot.user}')
 
-if __name__ == "__main__":
-    bot.run(BOT_TOKEN)
+
+bot.run(BOT_TOKEN)
