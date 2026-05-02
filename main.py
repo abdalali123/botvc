@@ -54,6 +54,8 @@ class GrokBot(commands.Bot):
                     "--no-first-run",
                     "--no-default-browser-check",
                     "--window-size=1280,800",
+                    "--use-fake-ui-for-media-stream",
+                    "--use-fake-device-for-media-stream",
                 ]
             )
             log("setup_hook", "Browser launched ✓")
@@ -67,6 +69,7 @@ class GrokBot(commands.Bot):
                 viewport={"width": 1280, "height": 800},
                 locale="en-US",
                 timezone_id="America/New_York",
+                permissions=["microphone", "camera"],
             )
             log("setup_hook", "Browser context created ✓")
 
