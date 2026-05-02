@@ -5,7 +5,16 @@ import os
 import asyncio
 import json
 import time
+import io
+import tempfile
 from playwright.async_api import async_playwright
+
+# gTTS: converts text → MP3 in memory, no PulseAudio required
+try:
+    from gtts import gTTS
+    HAS_GTTS = True
+except ImportError:
+    HAS_GTTS = False
 
 # ============ VOICE RECV (for Discord → Grok audio) ============
 try:
@@ -266,6 +275,8 @@ class GrokBot(commands.Bot):
             # ---- Register commands ----
             self.tree.add_command(nega, guild=MY_GUILD)
             self.tree.add_command(leave, guild=MY_GUILD)
+            self.tree.add_command(test_audio, guild=MY_GUILD)
+            self.tree.add_command(ask_grok, guild=MY_GUILD)
             await self.tree.sync(guild=MY_GUILD)
             log("SETUP", "Commands synced ✓")
 
@@ -369,6 +380,180 @@ async def leave(interaction: discord.Interaction):
     except Exception as e:
         log("COMMAND", f"Leave error: {e}", "ERROR")
         await interaction.followup.send(f"❌ Error while disconnecting: {e}")
+
+
+# ============ TTS HELPER ============
+
+async def speak_in_vc(vc: discord.VoiceClient, text: str) -> bool:
+    """
+    Convert text → MP3 via gTTS, write to a temp file, play via FFmpeg.
+    Returns True on success, False on failure. No PulseAudio required.
+    """
+    if not HAS_GTTS:
+        log("TTS", "gTTS not installed", "ERROR")
+        return False
+    if vc.is_playing():
+        vc.stop()
+    try:
+        loop = asyncio.get_event_loop()
+
+        # gTTS is blocking — run in thread pool to avoid freezing the event loop
+        def _generate():
+            tts = gTTS(text=text, lang="en")
+            buf = io.BytesIO()
+            tts.write_to_fp(buf)
+            buf.seek(0)
+            return buf.read()
+
+        mp3_bytes = await loop.run_in_executor(None, _generate)
+
+        # Write to a named temp file — FFmpeg needs seekable input
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            f.write(mp3_bytes)
+            tmp_path = f.name
+
+        def _cleanup(err):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            if err:
+                log("TTS", f"Playback error: {err}", "ERROR")
+
+        source = discord.FFmpegPCMAudio(tmp_path)
+        vc.play(discord.PCMVolumeTransformer(source, volume=1.0), after=_cleanup)
+        log("TTS", f"Speaking: {text[:80]}{'...' if len(text) > 80 else ''}")
+        return True
+    except Exception as e:
+        log("TTS", f"Failed to generate/play TTS: {e}", "ERROR")
+        return False
+
+
+# ============ /test COMMAND ============
+
+@app_commands.command(name="test", description="Play a TTS message in voice to verify audio works")
+@app_commands.describe(message="What to say (leave blank for a default hello)")
+async def test_audio(interaction: discord.Interaction, message: str = "Hello! The audio bridge is working correctly."):
+    try:
+        await interaction.response.defer(thinking=True)
+    except discord.errors.NotFound:
+        return
+
+    vc = interaction.guild.voice_client
+    if not vc:
+        return await interaction.followup.send("❌ Use `/nega` to join a voice channel first!")
+    if not HAS_GTTS:
+        return await interaction.followup.send("❌ `gtts` not installed — rebuild the container.")
+
+    ok = await speak_in_vc(vc, message)
+    if ok:
+        await interaction.followup.send(f"🔊 Playing: *{message}*")
+    else:
+        await interaction.followup.send("❌ TTS failed — check logs.")
+
+
+# ============ /ask COMMAND ============
+
+@app_commands.command(name="ask", description="Ask Grok a question and hear the answer spoken in voice")
+@app_commands.describe(question="Your question for Grok")
+async def ask_grok(interaction: discord.Interaction, question: str):
+    try:
+        await interaction.response.defer(thinking=True)
+    except discord.errors.NotFound:
+        return
+
+    vc = interaction.guild.voice_client
+    if not vc:
+        return await interaction.followup.send("❌ Use `/nega` to join a voice channel first!")
+    if not bot.page:
+        return await interaction.followup.send("❌ Grok browser page is not loaded.")
+    if not HAS_GTTS:
+        return await interaction.followup.send("❌ `gtts` not installed — rebuild the container.")
+
+    try:
+        page = bot.page
+        log("ASK", f"Question: {question}")
+
+        # Make sure we are on grok.com
+        if "grok.com" not in page.url:
+            await page.goto("https://grok.com", timeout=15000)
+            await page.wait_for_load_state("networkidle", timeout=10000)
+
+        # Find and fill the chat input box
+        input_selectors = [
+            "textarea",
+            "[data-testid='chat-input']",
+            "div[contenteditable='true']",
+            "input[type='text']",
+        ]
+        typed = False
+        for sel in input_selectors:
+            try:
+                await page.wait_for_selector(sel, timeout=3000)
+                await page.click(sel)
+                await page.fill(sel, question)
+                typed = True
+                log("ASK", f"Input filled via selector: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not typed:
+            return await interaction.followup.send(
+                "❌ Could not find Grok's input box — the page layout may have changed."
+            )
+
+        await page.keyboard.press("Enter")
+        await interaction.followup.send(f"💬 Asked Grok: *{question}*\n⏳ Waiting for reply...")
+        log("ASK", "Submitted — waiting for Grok response...")
+
+        # Poll for the assistant reply (up to 30s)
+        reply_text = None
+        for _ in range(30):
+            await asyncio.sleep(1)
+            for sel in [
+                "[data-message-author-role='assistant']",
+                "[class*='AssistantMessage']",
+                "[class*='assistant-message']",
+                "[class*='response']",
+                "article",
+            ]:
+                try:
+                    els = page.locator(sel)
+                    count = await els.count()
+                    if count > 0:
+                        txt = await els.last.inner_text(timeout=1000)
+                        if txt and len(txt.strip()) > 10:
+                            reply_text = txt.strip()
+                            break
+                except Exception:
+                    continue
+            if reply_text:
+                break
+
+        # Last-resort fallback: grab visible text from <main>
+        if not reply_text:
+            try:
+                reply_text = (await page.inner_text("main", timeout=3000)).strip()[-600:]
+            except Exception:
+                pass
+
+        if not reply_text:
+            return await interaction.followup.send("❌ Could not read Grok's response. Try again.")
+
+        log("ASK", f"Grok replied ({len(reply_text)} chars)")
+
+        # Speak the reply (cap at 500 chars so it doesn't run forever)
+        ok = await speak_in_vc(vc, reply_text[:500])
+        display = reply_text[:1200] + ("..." if len(reply_text) > 1200 else "")
+        if ok:
+            await interaction.followup.send(f"🤖 **Grok says:**\n{display}")
+        else:
+            await interaction.followup.send(f"🤖 **Grok says** (TTS failed):\n{display}")
+
+    except Exception as e:
+        log("ASK", f"Unexpected error: {e}", "ERROR")
+        await interaction.followup.send(f"❌ Error: {e}")
 
 
 # ============ RUN ============
