@@ -1,19 +1,24 @@
 #!/bin/bash
 set -e
 
-echo "[startup] Starting PulseAudio (non-system mode, allow-root=yes)..."
+echo "[startup] Starting PulseAudio as 'pulse' user..."
 
-# Non-system mode uses PULSE_RUNTIME_PATH for its socket
-export PULSE_RUNTIME_PATH=/tmp/pulse
+# PulseAudio won't run as root in non-system mode.
+# Run it as the dedicated 'pulse' user; auth-anonymous=1 in default.pa
+# lets the root bot process connect to the socket without a cookie.
 mkdir -p /tmp/pulse
+chown pulse:pulse /tmp/pulse
 
-# No --system flag → no D-Bus dependency; daemon.conf has allow-root=yes
-pulseaudio \
-    --daemonize=yes \
-    --exit-idle-time=-1 \
-    --log-level=error
+su -s /bin/sh pulse -c "
+    HOME=/home/pulse \
+    PULSE_RUNTIME_PATH=/tmp/pulse \
+    pulseaudio \
+        --daemonize=yes \
+        --exit-idle-time=-1 \
+        --log-level=error
+"
 
-# Wait up to 10 s for the socket to appear
+# Wait up to 10 s for the socket
 for i in $(seq 1 10); do
     [ -S /tmp/pulse/native ] && break
     echo "[startup] Waiting for PA socket... ($i/10)"
@@ -21,7 +26,7 @@ for i in $(seq 1 10); do
 done
 
 if [ ! -S /tmp/pulse/native ]; then
-    echo "[ERROR] PulseAudio socket never appeared. Check daemon.conf allow-root=yes"
+    echo "[ERROR] PulseAudio socket never appeared!"
     exit 1
 fi
 
