@@ -3,14 +3,12 @@ set -e
 
 echo "[startup] Starting PulseAudio as 'pulse' user..."
 
-# PulseAudio won't run as root in non-system mode.
-# Run it as the dedicated 'pulse' user; auth-anonymous=1 in default.pa
-# lets the root bot process connect to the socket without a cookie.
+# تنظيف أي بقايا سابقة لمنع فشل التشغيل
 mkdir -p /tmp/pulse
 chown pulse:pulse /tmp/pulse
-# Stale socket from a previous run causes "Daemon startup failed" — always remove it first
 rm -f /tmp/pulse/native
 
+# تشغيل PulseAudio بوضع المستخدم العادي لضمان تحميل الوحدات
 su -s /bin/sh pulse -c "
     HOME=/home/pulse \
     PULSE_RUNTIME_PATH=/tmp/pulse \
@@ -20,7 +18,7 @@ su -s /bin/sh pulse -c "
         --log-level=error
 "
 
-# Wait up to 10 s for the socket
+# الانتظار حتى يصبح الـ Socket جاهزاً
 for i in $(seq 1 10); do
     [ -S /tmp/pulse/native ] && break
     echo "[startup] Waiting for PA socket... ($i/10)"
@@ -32,13 +30,12 @@ if [ ! -S /tmp/pulse/native ]; then
     exit 1
 fi
 
+# توحيد المسار ليراه البوت والمتصفح
 export PULSE_SERVER=unix:/tmp/pulse/native
 
-echo "[startup] PulseAudio ready. Devices:"
-pactl list short sinks
-pactl list short sources
-
-pactl set-default-sink   grok_speaker
+echo "[startup] PulseAudio ready. Configuring devices..."
+# ضبط الأجهزة الافتراضية
+pactl set-default-sink grok_speaker
 pactl set-default-source discord_mic
 
 echo "[startup] Launching bot..."
