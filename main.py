@@ -14,7 +14,7 @@ MY_GUILD = discord.Object(id=1408448201555447968)
 def log(step: str, msg: str, level: str = "INFO"):
     print(f"[{level}] [{step}] {msg}", flush=True)
 
-async def screenshot(page, name: str) -> str | None:
+async def screenshot(page, name: str) -> "str | None":
     """Save a screenshot and return its path (or None on failure)."""
     path = f"/tmp/debug_{name}.png"
     try:
