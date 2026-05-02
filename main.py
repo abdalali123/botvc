@@ -132,7 +132,8 @@ class GrokBot(commands.Bot):
     async def setup_hook(self):
         log("setup_hook", "Initializing PulseAudio environment variables...")
         # Ensure the PA system socket is visible to this process and to Chromium
-        os.environ.setdefault("PULSE_SERVER", "unix:/var/run/pulse/native")
+        os.environ.setdefault("PULSE_RUNTIME_PATH", "/tmp/pulse")
+        os.environ.setdefault("PULSE_SERVER", "unix:/tmp/pulse/native")
 
         log("setup_hook", "Launching Browser...")
         try:
