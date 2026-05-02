@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from discord.ext import commands, voice_recv # إضافة voice_recv
+from discord.ext import commands, voice_recv
 import os
 import asyncio
 import json
@@ -23,9 +23,9 @@ class GrokBot(commands.Bot):
         self.grok_ready = False
 
     async def setup_hook(self):
-        log("setup_hook", "Starting Playwright with PulseAudio routing...")
+        log("setup_hook", "Initializing optimized environment for Railway...")
         
-        # توجيه المتصفح لاستخدام أجهزة الصوت الوهمية
+        # ربط PulseAudio بالمتصفح
         os.environ["PULSE_SINK"] = "grok_output"
         os.environ["PULSE_SOURCE"] = "user_voice_to_grok.monitor"
 
@@ -36,22 +36,23 @@ class GrokBot(commands.Bot):
                 args=[
                     "--no-sandbox",
                     "--disable-blink-features=AutomationControlled",
-                    "--use-fake-ui-for-media-stream",
+                    "--use-fake-ui-for-media-stream", # قبول الميكروفون تلقائياً
                     "--autoplay-policy=no-user-gesture-required",
+                    "--disable-webrtc-hw-encoding",
+                    "--disable-webrtc-hw-decoding",
+                    "--force-webrtc-ip-handling-policy=default_public_interface_only"
                 ]
             )
-            self.context = await self.browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                permissions=["microphone"]
-            )
+            self.context = await self.browser.new_page()
             
-            # تحميل الكوكيز
+            # منح الإذن الصريح للميكروفون لتجاوز خطأ FAILED
+            await self.context.context.grant_permissions(["microphone"], origin="https://grok.com")
+
             if os.path.exists("cookies.json"):
                 with open("cookies.json", "r") as f:
-                    cookies = json.load(f)
-                await self.context.add_cookies(cookies)
+                    await self.context.context.add_cookies(json.load(f))
 
-            self.page = await self.context.new_page()
+            self.page = self.context
             asyncio.create_task(self._load_grok())
 
         except Exception as e:
@@ -70,10 +71,9 @@ class GrokBot(commands.Bot):
 
 bot = GrokBot()
 
-# --- كلاس لاستقبال الصوت وتحويله إلى PulseAudio ---
+# --- جسر إرسال صوت ديسكورد إلى ميكروفون Grok ---
 class PulseAudioSink(voice_recv.AudioSink):
     def __init__(self):
-        # فتح عملية ffmpeg لكتابة الصوت القادم من ديسكورد إلى ميكروفون Grok الوهمي
         self.process = subprocess.Popen(
             ['ffmpeg', '-f', 's16le', '-ar', '48000', '-ac', '2', '-i', '-', 
              '-f', 'pulse', 'user_voice_to_grok'],
@@ -88,40 +88,44 @@ class PulseAudioSink(voice_recv.AudioSink):
         if self.process:
             self.process.terminate()
 
-@app_commands.command(name="nega", description="Connect Grok voice to VC")
+@app_commands.command(name="nega", description="Call Grok to your voice channel")
 async def nega(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
 
     if not interaction.user.voice:
-        return await interaction.followup.send("⚠️ Join a VC first!")
+        return await interaction.followup.send("⚠️ Join a voice channel first!")
 
-    # 1. الاتصال بالقناة الصوتية
+    # 1. الاتصال الصوتي (استخدام VoiceRecvClient لاستقبال الصوت)
     channel = interaction.user.voice.channel
     vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
 
-    # 2. تشغيل وضع الصوت في Grok
     try:
-        await bot.page.click('button[aria-label="Enter voice mode (Ctrl+⇧O)"]', timeout=5000)
-        await asyncio.sleep(2)
-        
-        # 3. الجسر الصوتي الأول: من Grok إلى Discord (سماع Grok)
-        grok_audio = discord.FFmpegPCMAudio(
+        # 2. تفعيل وضع الصوت في Grok
+        # البحث عن الزر بناءً على الـ aria-label الذي ظهر في الفحص السابق
+        voice_btn = self.page.locator('button[aria-label*="voice mode"]')
+        await voice_btn.click()
+        await asyncio.sleep(3)
+
+        # 3. الجسر الصوتي: سماع Grok (Grok Output -> Discord)
+        grok_to_discord = discord.FFmpegPCMAudio(
             source="grok_output.monitor",
             before_options="-f pulse",
             options="-af volume=1.5"
         )
-        vc.play(grok_audio)
+        if not vc.is_playing():
+            vc.play(grok_to_discord)
 
-        # 4. الجسر الصوتي الثاني: من المستخدمين إلى Grok (تحدث إلى Grok)
+        # 4. الجسر الصوتي: التحدث إلى Grok (Discord -> Grok Mic)
         vc.listen(PulseAudioSink())
 
-        await interaction.followup.send("🎙️ **Grok متصل الآن!** يمكنك التحدث معه مباشرة.")
+        await interaction.followup.send("✅ **تم الاتصال!** Grok يسمعك الآن في القناة الصوتية.")
 
     except Exception as e:
-        await interaction.followup.send(f"❌ فشل الاتصال الصوتي: `{e}`")
+        log("nega", f"Interaction error: {e}", "ERROR")
+        await interaction.followup.send(f"❌ خطأ في الاتصال بـ Grok: `{e}`")
 
 @bot.event
 async def on_ready():
-    log("on_ready", f"Logged in as {bot.user}")
+    log("on_ready", f"Bot online as {bot.user}")
 
 bot.run(BOT_TOKEN)
